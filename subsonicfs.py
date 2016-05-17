@@ -49,8 +49,8 @@ class SubsonicFS(Operations):
     
     @q
     def __init__(self,root, url,user,password,port):
+        self.root =root
         self.subsonic = libsonic.Connection(url,user,password,port=port)
-        self.root = root
         self._file_timestamp = int(time.time())
         if self.cacheArtists == None:
             self.cacheArtists = self.subsonic.getIndexes()
@@ -311,17 +311,17 @@ class SubsonicFS(Operations):
     def fsync(self, path, fdatasync, fh):
         return self.flush(path, fh)
 
-def main(mountpoint,root):
+def main(mountpoint,url,user,password,port):
     pid = str(os.getpid())
     f = open('/tmp/subsonic_pid', 'w')
     f.write(pid)
     f.close()
     
-    url = 'http://xxxxxx.xxxxx.com'
-    user = 'user'
-    password = 'password'
-    port = 80
-    FUSE(SubsonicFS(root,url,user,password,port), mountpoint, nothreads=True, foreground=True)
+    #url = 'http://xxxxxx.xxxxx.com'
+    #user = 'user'
+    #password = 'password'
+    #port = 80
+    FUSE(SubsonicFS('/tmp',url,user,password,port), mountpoint, nothreads=True, foreground=True)
 
 if __name__ == '__main__':
-    main(sys.argv[2], sys.argv[1])
+    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
