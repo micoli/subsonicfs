@@ -49,15 +49,19 @@ class SubsonicFS(Operations):
     
     @q
     def __init__(self,root, url,user,password,port):
-        self.root =root
+        self.root = root
         self.subsonic = libsonic.Connection(url,user,password,port=port)
         self._file_timestamp = int(time.time())
-        if self.cacheArtists == None:
-            self.cacheArtists = self.subsonic.getIndexes()
-        if self.cacheGenres == None:
-            self.cacheGenres = self.subsonic.getGenres()
-            #print json.dumps(self.cacheArtists)
-            #sys.exit(0)
+        self.init_cache()
+        #print json.dumps(self.cacheArtists)
+        #sys.exit(0)
+
+    def init_cache(self):
+        self.cache={
+            'artists':self.subsonic.getIndexes(),
+            'genres':self.subsonic.getGenres(),
+            'musicdir':{}
+        }
 
     def ddie(self,a):
         print json.dumps(a)
@@ -87,9 +91,7 @@ class SubsonicFS(Operations):
         #if path in ['/','._.']:
         #    return self.genericDirAttr()
         if re.search('^/artists/([^/]*)/([^/]*)/([^/]*)/([^/]*)$',path):
-            #data = self.get_struct(path)
-            #return self.genericFileAttr(data['data'])#{'size':1000})
-            return self.genericFileAttr({'size':1000})
+            return self.genericFileAttr(self.get_struct(path)['data'])
         else:
             return self.genericDirAttr()
 
@@ -122,42 +124,53 @@ class SubsonicFS(Operations):
         except KeyError:
             return []
             
+    def get_cache_musicdir(self,id):
+        if id not in self.cache['musicdir']:
+            self.cache['musicdir'][id] = self.subsonic.getMusicDirectory(id)
+        return self.cache['musicdir'][id]
+    
     def get_struct_artists(self,paths):
         data=[]
         if len(paths) == 1:
-            for r in self.cacheArtists['indexes']['index']:
+            for r in self.cache['artists']['indexes']['index']:
                 data.append({'name' : r['name']})
             return self.make_dir(data)
         
-        artists = [props for props in self.cacheArtists['indexes']['index'] if props['name'] == paths[1]][0]
+        artists = [props for props in self.cache['artists']['indexes']['index'] if props['name'] == paths[1]][0]
         if len(paths) == 2:
             for r in artists['artist']:
                 data.append({'name' : r['name']})
             return self.make_dir(data)
         
         artist = [props for props in artists['artist'] if props['name'] == paths[2]][0]
-        albums = self.subsonic.getMusicDirectory(artist['id'])
+        self.get_cache_musicdir(artist['id'])
         if len(paths) == 3:
-            for r in albums['directory']['child']:
+            for r in self.cache['musicdir'][artist['id']]['directory']['child']:
                 data.append({'name' : r['title']})
             return self.make_dir(data)
         
-        album = [props for props in albums['directory']['child'] if props['title'] == paths[3]][0]
-        titles = self.subsonic.getMusicDirectory(album['id'])
+        album = [props for props in self.cache['musicdir'][artist['id']]['directory']['child'] if props['title'] == paths[3]][0]
+        
+        self.get_cache_musicdir(album['id'])
+        if album['id'] not in self.cache['musicdir']:
+            self.cache['musicdir'][album['id']] = self.subsonic.getMusicDirectory(artist['id'])
         if len(paths) == 4:
-            for r in titles['directory']['child']:
+            for r in self.cache['musicdir'][album['id']]['directory']['child']:
                 data.append({'name' : "%02d-%s.%s"%(r['track'],r['title'],r['suffix'])})
+                #data.append({'name' : "%02d-%s.%s"%(r['track'],r['title'],'nfo')})
             return self.make_files(data)
 
         if len(paths) == 5:
-            title = [props for props in titles['directory']['child'] if "%02d-%s.%s"%(props['track'],props['title'],props['suffix']) == paths[4]][0]
-            print json.dumps(title)
+            title = [props for props in self.cache['musicdir'][album['id']]['directory']['child'] if "%02d-%s.%s"%(props['track'],props['title'],props['suffix']) == paths[4]][0]
+            #if title == None:
+            #    title = [props for props in self.cache['musicdir'][album['id']]['directory']['child'] if "%02d-%s.%s"%(props['track'],props['title'],'nfo') == paths[4]][0]
+            #print json.dumps(title)
             return self.make_files(title)
 
     def get_struct_genres(self,paths):
         data=[]
         if len(paths) == 1:
-            for r in self.cacheGenres['genres']['genre']:
+            for r in self.cache['genres']['genres']['genre']:
                 data.append({'name' : r['value']})
             return data
         if len(paths) == 2:
@@ -174,7 +187,7 @@ class SubsonicFS(Operations):
                 for r in albums['albumList']['album']:
                     data.append({'name' : "%s - %s"%(r['artist'],r['title'])})
                 return self.make_dir(data)
-            print json.dumps(sub1)
+            #print json.dumps(sub1)
             return self.make_dir(data)
             
     def get_struct_albums(self,paths):
@@ -259,12 +272,8 @@ class SubsonicFS(Operations):
     # File methods
     # ============
 
-    #def open(self, path, flags):
-    #    full_path = self._full_path(path)
-    #    return os.open(full_path, flags)
     @q
     def open(self, path, flags):
-        # Only support for 'READ ONLY' flag
         access_flags = os.O_RDONLY | os.O_WRONLY | os.O_RDWR
         if flags & access_flags != os.O_RDONLY:
             return -errno.EACCES
@@ -279,11 +288,7 @@ class SubsonicFS(Operations):
 
     @q
     def read(self, path, length, offset, fh):
-        #os.lseek(fh, offset, os.SEEK_SET)
-        #return os.read(fh, length)
-    
-        cache_filename = self.cache_filename(path);
-        with io.open(cache_filename,'br') as file:
+        with io.open(self.cache_filename(path),'br') as file:
             content = file.read()
         print "-- %s %d--"%(path,len(content))
         if offset < len(content):
@@ -303,13 +308,14 @@ class SubsonicFS(Operations):
         return False
 
     def flush(self, path, fh):
-        return os.fsync(fh)
+        return True
 
     def release(self, path, fh):
-        return os.close(fh)
+        return True
 
     def fsync(self, path, fdatasync, fh):
-        return self.flush(path, fh)
+        #return self.flush(path, fh)
+        return True
 
 def main(mountpoint,url,user,password,port):
     pid = str(os.getpid())
@@ -317,10 +323,7 @@ def main(mountpoint,url,user,password,port):
     f.write(pid)
     f.close()
     
-    #url = 'http://xxxxxx.xxxxx.com'
-    #user = 'user'
-    #password = 'password'
-    #port = 80
+    # python subsonicfs.py  /tmp/fs http://xxxxxx.xxxxx.com user password 80
     FUSE(SubsonicFS('/tmp',url,user,password,port), mountpoint, nothreads=True, foreground=True)
 
 if __name__ == '__main__':
