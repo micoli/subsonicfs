@@ -12,50 +12,90 @@ import stat
 import time,q,re,io
 import libsonic
 import hashlib
+from matcher import Matcher
 
+matcher = Matcher()
+
+class SSFSNode():
+    def __init__(self):
+        self._file_timestamp = int(time.time())
+        
+    def get(self,overide):
+        z = {
+            'st_atime'  : self._file_timestamp,
+            'st_ctime'  : self._file_timestamp,
+            'st_mtime'  : self._file_timestamp,
+            'st_uid'    : os.getuid(),
+            'st_gid'    : os.getgid()
+        }
+        z.update(overide)
+        return z
+        
+class SSFSFolder(SSFSNode):
+    def get(self):
+        return SSFSNode.get(self,{
+            'st_mode' : stat.S_IFDIR | 0555,
+            'st_nlink': 2,
+            'st_size' : 4096,
+        })
+
+class SSFSFile(SSFSNode):
+    def init(self,size):
+        super(File, self).__init__()
+        self.size = size
+    def get(self):
+        return SSFSNode.get(self,{
+            'st_mode' : stat.S_IFREG | 0444,
+            'st_nlink': 1,
+            'st_size' : self.size
+        })
+
+class cached_libsonic():
+    def __init__(self,url,user,password,port):
+        self.subsonic = libsonic.Connection(url,user,password,port=port)
+        
+    def getIndexes(self):
+        return self.subsonic.getIndexes()
+    
+    def getGenres(self):
+        return self.subsonic.getGenres()
+    
+    def getMusicDirectory(self,id):
+        return self.subsonic.getMusicDirectory(id)
+    
+    def getSongsByGenre(self,genre):
+        return self.subsonic.getSongsByGenre(genre)
+    
+    def getAlbumListByGenre(self,genre):
+        return self.subsonic.getAlbumList('byGenre',genre=genre)
+    
+    def download(selfself,id):
+        return self.subsonic.download(id)
+    
+#@route(matcher=matcher,regex='^/$')
+#  global matcher
+#        if not matcher.route(self.path,self,'POST'):
+#            self.do_404()
 class SubsonicFS(Operations):
     root_dirs = ['artists','albums','playlists','genres'];
     cacheArtists = None
     cacheGenres = None
-    def genericDirAttr(self):
-        return {
-            'st_atime'  : self._file_timestamp,
-            'st_ctime'  : self._file_timestamp,
-            'st_mtime'  : self._file_timestamp,
-            'st_mode'   : stat.S_IFDIR | 0555,
-            'st_nlink'  : 2,
-            'st_size'   : 4096,
-            'st_uid'    : os.getuid(),
-            'st_gid'    : os.getgid()
-        }
         
-    def genericFileAttr(self,file):
-        return {
-            'st_atime'  : self._file_timestamp,
-            'st_ctime'  : self._file_timestamp,
-            'st_mtime'  : self._file_timestamp,
-            'st_mode'   : stat.S_IFREG | 0444,
-            'st_nlink'  : 2,
-            'st_size'   : file['size'],
-            'st_uid'    : os.getuid(),
-            'st_gid'    : os.getgid()
-        }
-        
+    @q
+    def __init__(self,root, url,user,password,port):
+        self.root = root
+        self.subsonic = cached_libsonic(url,user,password,port)
+        self._file_timestamp = int(time.time())
+        self.init_cache()
+        #print json.dumps(self.cacheArtists)
+        #sys.exit(0)
+
     def cache_filename(self,path):
         hash = hashlib.md5(path.encode('utf-8')).hexdigest() #encode('ascii')
         if(not os.path.exists('/tmp/cache/%s'%(hash[:16]))):
             os.mkdir('/tmp/cache/%s'%(hash[:16]))
         return '/tmp/cache/%s/%s'%(hash[:16],hash[16:])
     
-    @q
-    def __init__(self,root, url,user,password,port):
-        self.root = root
-        self.subsonic = libsonic.Connection(url,user,password,port=port)
-        self._file_timestamp = int(time.time())
-        self.init_cache()
-        #print json.dumps(self.cacheArtists)
-        #sys.exit(0)
-
     def init_cache(self):
         self.cache={
             'artists':self.subsonic.getIndexes(),
@@ -63,12 +103,6 @@ class SubsonicFS(Operations):
             'musicdir':{}
         }
 
-    def ddie(self,a):
-        print json.dumps(a)
-        sys.exit(0)
-        
-    # Helpers
-    # =======
     @q
     def _full_path(self, partial):
         if partial.startswith("/"):
@@ -76,24 +110,17 @@ class SubsonicFS(Operations):
         path = os.path.join(self.root, partial)
         return path
 
-    # Filesystem methods
-    # ==================
-    
-    @q
-    def access(self, path, mode):
-        pass
-        #full_path = self._full_path(path)
-        #if not os.access(full_path, mode):
-        #    raise FuseOSError(errno.EACCES)
-
     @q
     def getattr(self, path, fh=None):
         #if path in ['/','._.']:
         #    return self.genericDirAttr()
         if re.search('^/artists/([^/]*)/([^/]*)/([^/]*)/([^/]*)$',path):
-            return self.genericFileAttr(self.get_struct(path)['data'])
+            f = SSFSFile()
+            f.size=self.get_struct(path)['data']['size']
+            return f.get()
         else:
-            return self.genericDirAttr()
+            f = SSFSFolder()
+            return f.get()
 
     def make_dir(self,data):
         return {'type':'dir','data':data}
@@ -130,7 +157,7 @@ class SubsonicFS(Operations):
         return self.cache['musicdir'][id]
     
     def get_struct_artists(self,paths):
-        data=[]
+        data=[] 
         if len(paths) == 1:
             for r in self.cache['artists']['indexes']['index']:
                 data.append({'name' : r['name']})
@@ -183,7 +210,7 @@ class SubsonicFS(Operations):
                 sub1 = self.subsonic.getSongsByGenre(paths[1])
                 pass
             if(paths[2]=='Albums'):
-                albums = self.subsonic.getAlbumList('byGenre',genre=paths[1])
+                albums = self.subsonic.getAlbumListByGenre(paths[1])
                 for r in albums['albumList']['album']:
                     data.append({'name' : "%s - %s"%(r['artist'],r['title'])})
                 return self.make_dir(data)
@@ -239,6 +266,9 @@ class SubsonicFS(Operations):
             'f_blocks', 'f_bsize', 'f_favail', 'f_ffree', 'f_files', 'f_flag',
             'f_frsize', 'f_namemax'))
 
+    def access(self, path, mode):
+        pass
+    
     def chmod(self, path, mode):
         return False
 
