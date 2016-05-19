@@ -41,7 +41,7 @@ class SSFSFolder(SSFSNode):
 
 class SSFSFile(SSFSNode):
     def init(self,size):
-        super(File, self).__init__()
+        super(SSFSFile, self).__init__()
         self.size = size
     def get(self):
         return SSFSNode.get(self,{
